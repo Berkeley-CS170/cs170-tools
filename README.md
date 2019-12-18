@@ -1,6 +1,9 @@
-# CS 170 Grading Script
+# CS 170 Tools
 
-This script performs grading for CS 170.
+This is a collection of tools for CS 170:
+
+- [grading](./docs/grading.md)
+
 It is designed to be modular, extensible, and reproducible.
 
 ## Installation
@@ -8,13 +11,4 @@ It is designed to be modular, extensible, and reproducible.
 Recommended way is to clone the repository locally, then run `python3 setup.py develop`.
 This lets you modify the script as it is running.
 
-Alternatively, you can do `pip3 install git+ssh://git@github.com/Berkeley-CS170/grading#egg=cs170-grading`.
-
-## Running
-
-`cs170-grading` runs the grading script.
-This will print out some help and instructions.
-
-## Basic Concepts
-
-### Execution Log
+Alternatively, you can do `pip3 install git+ssh://git@github.com/Berkeley-CS170/cs170-tools#egg=cs170-tools`.
