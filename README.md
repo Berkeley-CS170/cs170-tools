@@ -8,7 +8,7 @@ It is designed to be modular, extensible, and reproducible.
 Recommended way is to clone the repository locally, then run `python3 setup.py develop`.
 This lets you modify the script as it is running.
 
-Alternatively, you can do `pip3 install git+ssh://git@github.com/Berkeley-CS170/grading`
+Alternatively, you can do `pip3 install git+ssh://git@github.com/Berkeley-CS170/grading#egg=cs170-grading`.
 
 ## Running
 
