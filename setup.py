@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 setup(
-    name="cs170_grading",
+    name="cs170-grading",
     version="0.1",
     packages=find_packages(),
     entry_points={
