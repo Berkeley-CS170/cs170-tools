@@ -12,3 +12,7 @@ It is designed to be modular, extensible, and reproducible.
 
 `pipenv run python3 -m grading` runs the grading script.
 This will print out some help and instructions.
+
+## Basic Concepts
+
+### Execution Log
