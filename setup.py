@@ -1,12 +1,12 @@
 from setuptools import setup, find_packages
 setup(
-    name="cs170-grading",
+    name="cs170-tools",
     version="0.1",
     packages=find_packages(),
     entry_points={
-        'console_scripts': [
-            'cs170-grading = cs170_grading.__main__:main'
-        ]
+        # 'console_scripts': [
+        #     'cs170-grading = cs170_grading.__main__:main'
+        # ]
     },
     install_requires=[
         'numpy==1.15.0',

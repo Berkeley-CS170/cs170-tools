@@ -2,7 +2,7 @@
 
 This is a collection of tools for CS 170:
 
-- [grading](./docs/grading.md)
+- [Grading](./docs/grading.md)
 
 It is designed to be modular, extensible, and reproducible.
 
