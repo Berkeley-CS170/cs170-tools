@@ -5,8 +5,6 @@ import numpy as np
 
 class read_csv(Stage):
 
-    _name = "read_csv"
-
     def process(self, ctx):
         dest = self.arg('dest')
         file = self.arg('file')
@@ -25,34 +23,65 @@ class read_csv(Stage):
 
         
         ctx[dest] = df
-        
-class create_homeworks(Stage):
 
-    _name = "create_homeworks"
-    _defaults = dict(on='assignments')
+class save_csv(Stage):
 
     def process(self, ctx):
         pass
 
 class create_assignments(Stage):
 
-    _name = "create_assignments"
-    _defaults = dict(on='assignments')
-
     def process(self, ctx):
-        pass
+        hws, hw_points, assgn = self.args('hws', 'hw_points', 'assgn')
+        hw_points_each = hw_points / len(hws)
+        assignments = []
 
-class populate_assignment_points(Stage):
+        for hw in hws:
+            assignments.append(dict(
+                id='hw{}'.format(hw),
+                type='hw',
+                name='Homework {}'.format(hw),
+                weight=hw_points_each,
+                points=np.nan
+            ))
 
-    _name = "populate_assignment_points"
-    _defaults = dict(source='gradescope', on='assignments')
+        def get_type(assgn_id):
+            if assgn_id.startswith('mt') or assgn_id == 'final': return 'exam'
+            elif assgn_id == 'proj': return 'project'
+            else: raise ValueError()
+        
+        def get_name(assgn_id):
+            if assgn_id.startswith('mt'): return 'Midterm {}'.format(assgn_id[2:])
+            elif assgn_id == 'final': return 'Final Exam'
+            elif assgn_id == 'proj': return 'Project'
+            else: raise ValueError()
+            
 
-    def process(self, ctx):
-        pass
+        for assgn_id in assgn:
+            weight = assgn[assgn_id]
+            assgn_type = get_type(assgn_id)
+            assgn_name = get_name(assgn_id)
+            assignments.append(dict(
+                id=assgn_id,
+                type=assgn_type,
+                name=assgn_name,
+                weight=weight,
+                points=np.nan
+            ))
+        
+        ctx['assignments'] = pd.DataFrame(assignments)
+
+        S = ctx['assignments']['weight'].sum()
+        if S != 1.0:
+            print('WARN: sum of assignment weights is {}, not 1.0'.format(S))
 
 class match_students(Stage):
 
-    _name = "match_students"
+    """
+    Ensures that all students on bcourses are in gradescope.
+    If not, creates fake students so that grading can continue.
+    Also computes what emails are closest to help matching easier.
+    """
 
     def process(self, ctx):
         gradescope, bcourses = ctx['gradescope'], ctx['bcourses']
@@ -68,16 +97,14 @@ class match_students(Stage):
                 return levenshtein(value, row['Email'])
             return apply
 
-        def print_candidates(thres):
-            def apply(row):
-                if row['email_dists'] <= thres:
-                    print('  ', row['Name'], row['Email'], row['SID'])
-            return apply
+        def print_candidates(row):
+            print('  ', row['Name'], row['Email'], row['SID'])
 
         mismatch = False
 
         def check_ids(row):
             nonlocal mismatch
+            nonlocal gradescope
             if row['Student ID'] not in s:
                 print('WARN: student "{}" <{}> {} on bcourses not found in gradescope'.format(row['Name'], row['Email Address'], row['Student ID']))
 
@@ -86,14 +113,98 @@ class match_students(Stage):
                 g = gradescope.copy()
                 g['email_dists'] = g.apply(dist_to(email), axis=1)
                 by_emails = g.sort_values('email_dists')
-                print('HOWEVER: the following could be candidates')
-                by_emails[:5].apply(print_candidates(3), axis=1)
+                by_emails = by_emails[by_emails['email_dists'] <= 3]
+                if by_emails.shape[0] > 0:
+                    print('HOWEVER: the following could be candidates')
+                    by_emails.apply(print_candidates, axis=1)
                 mismatch = True
+
+                gradescope = gradescope.append({'Name': row['Name'] + ' (** MISSING)', 'Email': email, 'SID': row['Student ID']}, ignore_index=True)
 
         bcourses.apply(check_ids, axis=1)
 
         if mismatch:
             print('SUGGESTION: Match the missing students and add their sids to Gradescope, then re-download the Gradescope data')
+            print('  (So the script can continue, fake students with 0s have been added to Gradescope)')
 
         ctx['gradescope'] = gradescope
         ctx['bcourses'] = bcourses
+
+class populate_assignments(Stage):
+
+    """
+    Populates the assignment table with point values from gradescope.
+    """
+
+    def process(self, ctx):
+        pass
+
+class populate_grades(Stage):
+
+    """
+    Creates the 'grades' table, populating the assignments and weights for each student
+    """
+
+    _defaults = dict(source='gradescope', on='assignments', dest='grades')
+
+    def process(self, ctx):
+        pass
+
+class homework_floors(Stage):
+
+    """
+    """
+
+    def process(self, ctx):
+        pass
+
+class homework_drops(Stage):
+
+    """
+    Perform homework drops
+    """
+
+    def process(self, ctx):
+        pass
+
+class exam_drops(Stage):
+
+    """
+    Perform exam drops
+    """
+
+    def process(self, ctx):
+        pass
+
+class add_pt(Stage):
+
+    def process(self, ctx):
+        pass
+
+class create_buckets(Stage):
+
+    """
+    Create buckets according to the given guidelines.
+    """
+
+    def process(self, ctx):
+        pass
+
+class adjust_buckets(Stage):
+
+    """
+    Scan above and below to find more natural bucket locations to separate students.
+    """
+
+    def process(self, ctx):
+        pass
+
+class assign_letters(Stage):
+
+    def process(self, ctx):
+        pass
+
+class render_reports(Stage):
+
+    def process(self, ctx):
+        pass

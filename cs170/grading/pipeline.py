@@ -1,3 +1,4 @@
+import pandas as pd
 
 class Stage:
     """
@@ -5,8 +6,6 @@ class Stage:
 
     Has parameters that can be serialized, as well as optional defaults.
     """
-
-    _name = "<generic_stage>"
 
     def __init__(self, **kwargs):
         if hasattr(self, '_defaults'):
@@ -17,20 +16,24 @@ class Stage:
 
     def __str__(self):
         label = '<{}> '.format(self._label) if hasattr(self, '_label') else ''
-        return '{}{}({})'.format(label, self._name, str(self.params))
+        return '{}{}({})'.format(label, self.__class__.__name__, str(self.params))
 
     def arg(self, arg):
         if arg not in self.params:
-            raise KeyError('{} not supplied for {}')
+            raise KeyError('{} not supplied for {}'.format(arg, self))
         return self.params[arg]
 
-    def data(self, ctx, *args):
-        names = [self.arg(a) for a in args]
-        data = [ctx[n] for n in names]
-        return tuple(data)
+    def args(self, *args):
+        return [self.arg(arg) for arg in args]
     
     def process(self, ctx):
         raise NotImplementedError()
+
+def freeze():
+    pass
+
+def mark():
+    pass
 
 class Context:
     """
@@ -71,6 +74,14 @@ class Context:
 
     def __setitem__(self, key, value):
         self.history[-1][0][key] = value
+
+    def __contains__(self, key):
+        return key in self.history[-1][0]
+
+    def get_or_create(self, key):
+        if key not in self:
+            self[key] = pd.DataFrame()
+        return self[key]
 
     def inputs(self):
         return self.history[-1][1]
@@ -133,3 +144,4 @@ def concat_pipelines(pipelines):
 
 def merge_pipelines(pipelines):
     return MergePipeline(pipelines)
+
