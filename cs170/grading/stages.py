@@ -2,6 +2,7 @@ from .pipeline import *
 from .util import levenshtein
 import pandas as pd
 import numpy as np
+import os, os.path
 
 class read_csv(Stage):
 
@@ -27,9 +28,18 @@ class read_csv(Stage):
 class save_csv(Stage):
 
     def process(self, ctx):
-        pass
+        source = self.arg('source')
+        file = self.arg('file')
+        dr = os.path.dirname(file)
+        if not os.path.exists(dr):
+            os.makedirs(dr)
+        ctx[source].to_csv(file, index=False)
 
 class create_assignments(Stage):
+
+    """
+    Create the assignments table.
+    """
 
     def process(self, ctx):
         hws, hw_points, assgn = self.args('hws', 'hw_points', 'assgn')
@@ -41,8 +51,7 @@ class create_assignments(Stage):
                 id='hw{}'.format(hw),
                 type='hw',
                 name='Homework {}'.format(hw),
-                weight=hw_points_each,
-                points=np.nan
+                weight=hw_points_each
             ))
 
         def get_type(assgn_id):
@@ -65,8 +74,7 @@ class create_assignments(Stage):
                 id=assgn_id,
                 type=assgn_type,
                 name=assgn_name,
-                weight=weight,
-                points=np.nan
+                weight=weight
             ))
         
         ctx['assignments'] = pd.DataFrame(assignments)
@@ -87,8 +95,8 @@ class match_students(Stage):
         gradescope, bcourses = ctx['gradescope'], ctx['bcourses']
 
         # make sure both have string sids
-        gradescope['SID'] = gradescope['SID'].astype('<U')
-        bcourses['Student ID'] = bcourses['Student ID'].astype('<U')
+        gradescope['SID'] = gradescope['SID'].astype('U')
+        bcourses['Student ID'] = bcourses['Student ID'].astype('U')
 
         s = set(gradescope['SID'])
 
@@ -137,7 +145,40 @@ class populate_assignments(Stage):
     """
 
     def process(self, ctx):
-        pass
+        assgn = ctx['assignments']
+        gradescope = ctx['gradescope']
+        gradescope_assignments_explicit = self.arg_opt('gradescope_assignments', dict())
+        point_values_explicit = self.arg_opt('point_values', dict())
+
+        # take the first student, we only care about the max point values anyway
+        eg_row = gradescope.iloc[0]
+        
+        def gradescope_assignments(row):
+            assgn_id = row['id']
+            if assgn_id in gradescope_assignments_explicit:
+                return gradescope_assignments_explicit[assgn_id]
+            else:
+                return [row['name']]
+
+        assgn['gradescope'] = assgn.apply(gradescope_assignments, axis=1)
+
+        def points(row):
+            assgn_id = row['id']
+            gradescope_assignments = row['gradescope']
+            if assgn_id in point_values_explicit:
+                return point_values_explicit[assgn_id]
+            else:
+                points = list(set(
+                    eg_row[g + ' - Max Points'] for g in gradescope_assignments
+                ))
+                if len(points) > 1:
+                    print('WARN: assignment {} has multiple point values {}, picking {}'.format(
+                        assgn_id, ', '.join(str(x) for x in points), points[0]
+                        ))
+                return points[0]
+
+        ctx['assignments'] = assgn
+        assgn['points'] = assgn.apply(points, axis=1)
 
 class populate_grades(Stage):
 
@@ -148,20 +189,56 @@ class populate_grades(Stage):
     _defaults = dict(source='gradescope', on='assignments', dest='grades')
 
     def process(self, ctx):
-        pass
+        bcourses = ctx['bcourses']
+        gradescope = ctx['gradescope']
+        assgn = ctx['assignments']
+
+        grading_data = bcourses.merge(gradescope, how='left', left_on='Student ID', right_on='SID', suffixes=('', '_g'))
+
+        def mk_grades(row):
+            student = dict(
+                name=row['Name'],
+                sid=row['Student ID'],
+                email=row['Email Address']
+            )
+            
+            def add_grades(assgn_row):
+                aid = assgn_row['id']
+                point_values = list(
+                    row[a_name] for a_name in assgn_row['gradescope']
+                    if a_name in row and not np.isnan(row[a_name])
+                )
+                student[aid + '-points'] = max(point_values) if len(point_values) > 0 else np.nan
+                student[aid + '-max'] = assgn_row['points']
+                student[aid + '-weight'] = assgn_row['weight']
+                if student[aid + '-max'] != 0.0:
+                    student[aid + '-score'] = student[aid+'-points'] / assgn_row['points']
+                else:
+                    student[aid + '-score'] = 0.0
+
+            assgn.apply(add_grades, axis=1)
+
+            return pd.Series(student)
+
+        grades = grading_data.apply(mk_grades, axis=1)
+        ctx['grades'] = grades
 
 class homework_floors(Stage):
 
     """
+    
     """
 
     def process(self, ctx):
+
+        def floors(row):
+            pass
         pass
 
 class homework_drops(Stage):
 
     """
-    Perform homework drops
+    Perform homework drops.
     """
 
     def process(self, ctx):
@@ -178,13 +255,17 @@ class exam_drops(Stage):
 
 class add_pt(Stage):
 
+    """
+    Add points from one source to another
+    """
+
     def process(self, ctx):
         pass
 
 class create_buckets(Stage):
 
     """
-    Create buckets according to the given guidelines.
+    Create buckets table according to the given guidelines.
     """
 
     def process(self, ctx):

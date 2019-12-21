@@ -13,7 +13,8 @@ setup(
         'pandas==0.23.4',
         'matplotlib==3.0.3',
         'scipy==1.2.1',
-        'pillow==6.0.0',
-        'imageio==2.6.1'
+        'pillow==6.2.1',
+        'imageio==2.6.1',
+        'WeasyPrint==50'
     ]
 )

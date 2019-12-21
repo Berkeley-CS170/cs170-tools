@@ -23,6 +23,10 @@ class Stage:
             raise KeyError('{} not supplied for {}'.format(arg, self))
         return self.params[arg]
 
+    def arg_opt(self, arg, default=None):
+        if arg not in self.params: return default
+        else: return self.params[arg]
+
     def args(self, *args):
         return [self.arg(arg) for arg in args]
     
