@@ -21,7 +21,10 @@ class read_csv(Stage):
 
         if 'stringify' in self.params:
             df = df.copy(deep=True)
-
+            stringify = self.params['stringify']
+            cols = [stringify] if isinstance(stringify, str) else stringify
+            for col in cols:
+                df[col] = df[col].astype('U')
         
         ctx[dest] = df
 
@@ -34,6 +37,13 @@ class save_csv(Stage):
         if not os.path.exists(dr):
             os.makedirs(dr)
         ctx[source].to_csv(file, index=False)
+
+class rename(Stage):
+
+    def process(self, ctx):
+        table = self.arg('table')
+        cols = self.arg('cols')
+        ctx[table] = ctx[table].rename(columns=cols)
 
 class create_assignments(Stage):
 
@@ -226,19 +236,60 @@ class populate_grades(Stage):
 class homework_floors(Stage):
 
     """
-    
+    Create a floor on the homeworks.
+
+    Exceptions processed per-student: 
+        set_hw_floor (set the homework floor for the student globally)
+        parameters: hw_floor 
     """
 
     def process(self, ctx):
+        default = self.arg('default')
+        assgn = ctx['assignments']
+        hws = assgn[assgn['type'] == 'hw']
+        grades = ctx['grades']
+
+        floor_exceptions = dict()
+
+        def find_exceptions(row):
+            sid = row['sid']
+            if row['type'] == 'set_hw_floor':
+                floor_exceptions[sid] = row['hw_floor']
+
+        if 'student_exceptions' in ctx:
+            ctx['student_exceptions'].apply(find_exceptions, axis=1)
+
+        print(floor_exceptions)
 
         def floors(row):
-            pass
-        pass
+            sid = row['sid']
+            floor = floor_exceptions.get(sid, default)
+            hw_grades = dict()
+
+            def update_score(hw):
+                hw_id = hw['id']
+                score = row[hw_id + '-score']
+                if np.isnan(score):
+                    hw_grades[hw_id + '-score'] = np.nan
+                elif score < floor:
+                    hw_grades[hw_id + '-score'] = score / floor
+                else:
+                    hw_grades[hw_id + '-score'] = 1.0
+            
+            hws.apply(update_score, axis=1)
+            return pd.Series(hw_grades)
+
+        new_hw_grades = grades.apply(floors, axis=1)
+        grades.update(new_hw_grades)
 
 class homework_drops(Stage):
 
     """
     Perform homework drops.
+
+    Exceptions processed per-student: 
+        set_num_hw_drops (set the number of homework drops for the student)
+        parameters: num_hw_drops
     """
 
     def process(self, ctx):
