@@ -259,8 +259,6 @@ class homework_floors(Stage):
         if 'student_exceptions' in ctx:
             ctx['student_exceptions'].apply(find_exceptions, axis=1)
 
-        print(floor_exceptions)
-
         def floors(row):
             sid = row['sid']
             floor = floor_exceptions.get(sid, default)
@@ -313,6 +311,42 @@ class add_pt(Stage):
     def process(self, ctx):
         pass
 
+class compute_scores(Stage):
+
+    def process(self, ctx):
+
+        assignments = ctx['assignments']
+        grades = ctx['grades']
+
+        hw_weight = assignments[assignments['type'] == 'hw']['weight'].sum()
+        
+        def compute_for_student(row):
+            score = 0
+            hw_score = 0
+
+            def per_assignment(assgn):
+                nonlocal score, hw_score
+                aid = assgn['id']
+                if not np.isnan(row[aid + '-score']):
+                    assgn_score = row[aid + '-score'] * row[aid + '-weight']
+                    if aid.startswith('hw'):
+                        hw_score += assgn_score
+                    score += assgn_score
+
+            assignments.apply(per_assignment, axis=1)
+
+            print(hw_score / hw_weight)
+            
+            return pd.Series({
+                'total-score': score,
+                'hw-score': hw_score / hw_weight
+            })
+        
+        total_and_hw = grades.apply(compute_for_student, axis=1)
+        grades = pd.concat([grades, total_and_hw], axis=1)
+        grades = grades.sort_values('total-score', ascending=False).reset_index(drop=True)
+        ctx['grades'] = grades
+
 class create_buckets(Stage):
 
     """
@@ -320,7 +354,24 @@ class create_buckets(Stage):
     """
 
     def process(self, ctx):
-        pass
+        targets = self.arg('targets')
+        students = ctx['grades']
+
+        def discretize_targets(no_students, targets):
+            if sum(targets) != 1.0:
+                print('WARNING: targets don\'t sum to 1.0')
+            a = 0.0
+            cumulative_targets = []
+            for t in targets:
+                a += t
+                size_bucket = int(np.round(no_students * a))
+                cumulative_targets.append(size_bucket)
+            cumulative_targets[-1] = no_students
+            return cumulative_targets
+        
+        discrete = discretize_targets(students.shape[0], targets)
+        buckets = [dict(size=t) for t in discrete]
+        ctx['buckets'] = pd.DataFrame(buckets)
 
 class adjust_buckets(Stage):
 
@@ -329,12 +380,77 @@ class adjust_buckets(Stage):
     """
 
     def process(self, ctx):
-        pass
+        scan_frac, max_scan = self.args('scan_frac', 'max_scan')
+
+        all_scores = ctx['grades']['total-score']
+        buckets = ctx['buckets']['size']
+
+        def adjust_buckets(scores, buckets, scan_frac=0.2, max_scan=10):
+            new_buckets = []
+            for i, b in enumerate(buckets):
+                # adjust all but the last bucket - it has to include everyone anyway
+                if i != len(buckets) - 1:
+                    bucket_size = buckets[0] if i == 0 else buckets[i] - buckets[i-1]
+                    num_scan = min(max_scan, int(bucket_size * scan_frac))
+                    # scan width [b - num_scan, b + num_scan]
+                    samples = np.array([])
+                    bs = []
+                    for new_b in range(b - num_scan, b + num_scan + 1):
+                        score_diff = scores[new_b - 1] - scores[new_b]
+                        bs.append((len(bs), new_b))
+                        samples = np.append(samples, score_diff)
+                    print('mean difference of', len(bs), 'differences around bucket: ', np.mean(samples))
+                    max_i = max(bs, key=lambda x: samples[x[0]])[0]
+                    print('maximum', bs[max_i][1], 'with diff', samples[max_i],
+                        '({:2.2f}x)'.format(samples[max_i]/np.mean(samples)))
+                    new_b = bs[max_i][1]
+                    new_buckets.append(new_b)
+                else:
+                    new_buckets.append(b)
+            return new_buckets
+
+        new_buckets = adjust_buckets(all_scores, buckets, scan_frac, max_scan)
+        ctx['buckets']['size'] = new_buckets
+
+class create_boundaries(Stage):
+
+    """
+    Create the grading boundary thresholds from the buckets.
+    The threshold is determined by the minimum score among the students in each bucket.
+    """
+
+    def process(self, ctx):
+        buckets = ctx['buckets']
+        all_scores = ctx['grades']['total-score']
+        boundaries = [all_scores[s-1] for s in buckets['size']]
+        buckets['boundary'] = boundaries
+        ctx['buckets'] = buckets
 
 class assign_letters(Stage):
 
     def process(self, ctx):
-        pass
+        final_floor, score_floor, letter_grades, gpas = self.args('final_floor', 'score_floor', 'grades', 'gpas')
+        grades = ctx['grades']
+        boundaries = ctx['buckets']['boundary']
+
+        def compute_letter(row):
+            score = row['total-score']
+            final = row['final-score']
+
+            if score < score_floor and (np.isnan(final) or final < final_floor):
+                return pd.Series({'letter': 'F', 'gpa': 0})
+
+            bucket_i = min(k for k in range(len(boundaries)) if boundaries[k] <= score)
+            return pd.Series({
+                'letter': letter_grades[bucket_i],
+                'gpa': gpas[bucket_i]
+            })
+
+        letters = grades.apply(compute_letter, axis=1)
+        grades = pd.concat([grades, letters], axis=1)
+
+        print('avg gpa: {}'.format(grades['gpa'].mean()))
+        ctx['grades'] = grades
 
 class render_reports(Stage):
 
