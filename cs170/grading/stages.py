@@ -3,6 +3,7 @@ from .util import levenshtein
 import pandas as pd
 import numpy as np
 import scipy.stats
+import itertools
 import os, os.path
 
 class read_csv(Stage):
@@ -299,7 +300,7 @@ class homework_floors(Stage):
 class homework_drops(Stage):
 
     """
-    Perform homework drops.
+    Perform homework drops. Also computes hw-score
 
     Exceptions processed per-student: 
         set_num_hw_drops (set the number of homework drops for the student)
@@ -307,12 +308,113 @@ class homework_drops(Stage):
     """
 
     def process(self, ctx):
+        default = self.arg('default')
+        assgn = ctx['assignments']
+        hws = assgn[assgn['type'] == 'hw']
+        grades = ctx['grades']
+
+        drop_exceptions = dict()
+
+        def find_drop_exceptions(row):
+            sid = row['sid']
+            if row['type'] == 'set_num_hw_drops':
+                drop_exceptions[sid] = int(row['num_hw_drops'])
+        
+        if 'student_exceptions' in ctx:
+            ctx['student_exceptions'].apply(find_drop_exceptions, axis=1)
+
+        assgn_exceptions = dict()
+
+        def find_assgn_exceptions(row):
+            sid = row['sid']
+            if row['type'] == 'set_score':
+                if sid not in assgn_exceptions:
+                    assgn_exceptions[sid] = []
+                assignments = row['assignment'].replace(' ', '').split(',')
+                score = row['score']
+                droppable = row['droppable']
+                for a in assignments:
+                    assgn_exceptions[sid].append((a, score, droppable))
+        
+        if 'assignment_exceptions' in ctx:
+            ctx['assignment_exceptions'].apply(find_assgn_exceptions, axis=1)
+
+        N = grades.shape[0]
+        i = 0
+        all_hws = set(hws['id'])
 
         def hw_drops(row):
-            pass
+            nonlocal i
+            sid = row['sid']
+            num_drops = drop_exceptions.get(sid, default)
+            exceptions = assgn_exceptions.get(sid, [])
+            
+            droppable = set(hws['id'])
 
+            cur_weight = sum(row[aid + '-weight'] for aid in all_hws)
 
-        pass
+            hw_grades = dict()
+
+            for aid, score, assgn_droppable in exceptions:
+                # if we don't make it droppable, remove it from droppable
+                if not pd.isna(assgn_droppable) and not assgn_droppable:
+                    droppable.remove(aid)
+                hw_grades[aid + '-points'] = score
+                hw_grades[aid + '-score'] = score / row[aid + '-max']
+
+            best_weights = None
+            best_score = -np.inf
+
+            def score(hwid):
+                s = hwid + '-score'
+                if s in hw_grades: return hw_grades[s]
+                else: return np.nan_to_num(row[s])
+
+            # I tried to figure out how to do this with dynamic programmming, but the safest way is just brute force search...
+            for k in reversed(range(0, min(num_drops, len(droppable)) + 1)):
+                for c in itertools.combinations(droppable, k):
+                    new_weight = sum(row[aid + '-weight'] for aid in all_hws if aid not in c)
+                    scaling_factor = cur_weight / new_weight
+
+                    try_score = sum(score(aid) * row[aid + '-weight'] for aid in all_hws if aid not in c)
+                    try_weighted_score = try_score / new_weight
+                    if try_weighted_score > best_score:
+                        best_score = try_weighted_score
+                        best_weights = dict()
+                        for aid in all_hws:
+                            if aid in c: best_weights[aid + '-weight'] = 0.0
+                            else: best_weights[aid + '-weight'] = row[aid + '-weight'] * scaling_factor
+            
+            hw_grades.update(best_weights)
+            i += 1
+            if i % 50 == 0:
+                print('completed drops for {}/{}'.format(i, N))
+            return pd.Series(hw_grades)
+
+        def compute_hw_score(row):
+            all_hws = set(hws['id'])
+
+            hw_grades = dict()
+            total_score = 0.0
+            total_weight = 0.0
+            for a in all_hws:
+                total_weight += row[a + '-weight']
+                total_score += row[a + '-weight'] * np.nan_to_num(row[a + '-score'])
+
+            # compute score, points, weight, max, for a fake composite homework assignment
+            hw_grades['hw-composite-score'] = total_score     
+            hw_grades['hw-composite-points'] = total_score
+            hw_grades['hw-composite-weight'] = total_weight
+            hw_grades['hw-composite-max'] = 1.0
+
+            return pd.Series(hw_grades)
+
+        # new_hw_grades = grades.apply(hw_drops, axis=1)
+        # grades.update(new_hw_grades)
+
+        hw_composite_score = grades.apply(compute_hw_score, axis=1)
+        grades = pd.concat([grades, hw_composite_score], axis=1)
+        ctx['grades'] = grades
 
 class exam_drops(Stage):
 
@@ -434,27 +536,20 @@ class compute_scores(Stage):
 
         assignments = ctx['assignments']
         grades = ctx['grades']
-
-        hw_weight = assignments[assignments['type'] == 'hw']['weight'].sum()
         
         def compute_for_student(row):
             score = 0
-            hw_score = 0
 
             def per_assignment(assgn):
-                nonlocal score, hw_score
+                nonlocal score
                 aid = assgn['id']
                 if not np.isnan(row[aid + '-score']):
-                    assgn_score = row[aid + '-score'] * row[aid + '-weight']
-                    if aid.startswith('hw'):
-                        hw_score += assgn_score
-                    score += assgn_score
+                    score += row[aid + '-score'] * row[aid + '-weight']
 
             assignments.apply(per_assignment, axis=1)
             
             return pd.Series({
                 'total-score': score,
-                'hw-score': hw_score / hw_weight
             })
         
         total_and_hw = grades.apply(compute_for_student, axis=1)
