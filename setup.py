@@ -10,7 +10,7 @@ setup(
     },
     install_requires=[
         'numpy==1.15.0',
-        'pandas==0.23.4',
+        'pandas==0.25.3',
         'matplotlib==3.0.3',
         'scipy==1.2.1',
         'pillow==6.2.1',

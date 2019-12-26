@@ -2,6 +2,7 @@ from .pipeline import *
 from .util import levenshtein
 import pandas as pd
 import numpy as np
+import scipy.stats
 import os, os.path
 
 class read_csv(Stage):
@@ -105,10 +106,22 @@ class match_students(Stage):
         gradescope, bcourses = ctx['gradescope'], ctx['bcourses']
 
         # make sure both have string sids
-        gradescope['SID'] = gradescope['SID'].astype('U')
+        gradescope['sid'] = gradescope['sid'].astype('U')
         bcourses['Student ID'] = bcourses['Student ID'].astype('U')
 
-        s = set(gradescope['SID'])
+        # make sure unique gradescope SIDs
+        uniq_sid, counts = np.unique(gradescope['sid'], return_counts=True)
+        duplicates = uniq_sid[counts > 1]
+        counts_dup = counts[counts > 1]
+        has_duplicate = False
+        for i in range(len(counts_dup)):
+            if duplicates[i] != 'nan':
+                has_duplicate = True
+                print('WARN: student id {} appears {} times in gradescope'.format(duplicates[i], counts_dup[i]))
+        if has_duplicate:
+            print('SUGGESTION: delete the unecessary duplicates from Gradescope, then re-download the Gradescope data')
+
+        s = set(gradescope['sid'])
 
         def dist_to(value):
             def apply(row):
@@ -116,7 +129,7 @@ class match_students(Stage):
             return apply
 
         def print_candidates(row):
-            print('  ', row['Name'], row['Email'], row['SID'])
+            print('  ', row['Name'], row['Email'], row['sid'])
 
         mismatch = False
 
@@ -137,7 +150,7 @@ class match_students(Stage):
                     by_emails.apply(print_candidates, axis=1)
                 mismatch = True
 
-                gradescope = gradescope.append({'Name': row['Name'] + ' (** MISSING)', 'Email': email, 'SID': row['Student ID']}, ignore_index=True)
+                gradescope = gradescope.append({'Name': row['Name'] + ' (** MISSING)', 'Email': email, 'sid': row['Student ID']}, ignore_index=True)
 
         bcourses.apply(check_ids, axis=1)
 
@@ -190,6 +203,12 @@ class populate_assignments(Stage):
         ctx['assignments'] = assgn
         assgn['points'] = assgn.apply(points, axis=1)
 
+def get_score(points, max_points):
+    if max_points != 0.0:
+        return points / max_points
+    else:
+        return 0.0
+
 class populate_grades(Stage):
 
     """
@@ -199,11 +218,11 @@ class populate_grades(Stage):
     _defaults = dict(source='gradescope', on='assignments', dest='grades')
 
     def process(self, ctx):
-        bcourses = ctx['bcourses']
-        gradescope = ctx['gradescope']
+        bcourses = ctx['bcourses'].drop_duplicates(subset='Student ID')
+        gradescope = ctx['gradescope'].drop_duplicates(subset='sid')
         assgn = ctx['assignments']
 
-        grading_data = bcourses.merge(gradescope, how='left', left_on='Student ID', right_on='SID', suffixes=('', '_g'))
+        grading_data = bcourses.merge(gradescope, how='left', left_on='Student ID', right_on='sid', suffixes=('', '_g'))
 
         def mk_grades(row):
             student = dict(
@@ -221,10 +240,7 @@ class populate_grades(Stage):
                 student[aid + '-points'] = max(point_values) if len(point_values) > 0 else np.nan
                 student[aid + '-max'] = assgn_row['points']
                 student[aid + '-weight'] = assgn_row['weight']
-                if student[aid + '-max'] != 0.0:
-                    student[aid + '-score'] = student[aid+'-points'] / assgn_row['points']
-                else:
-                    student[aid + '-score'] = 0.0
+                student[aid + '-score'] = get_score(student[aid + '-points'], student[aid + '-max'])
 
             assgn.apply(add_grades, axis=1)
 
@@ -296,11 +312,52 @@ class homework_drops(Stage):
 class exam_drops(Stage):
 
     """
-    Perform exam drops
+    Perform exam drops. 
+
+    Fill in using percentile, among students that are counted in the curve.
     """
 
     def process(self, ctx):
-        pass
+        assgn_exceptions = ctx['assignment_exceptions']
+        grades = ctx['grades']
+
+        # make a copy so as we edit grades, it doesn't change the curve
+        grades_ref = ctx['grades'].copy(deep=True)
+        
+        def drop_exam(row):
+            if row['type'] == 'drop_and_fill':
+                sid = row['sid']
+                grades_row = grades[grades['sid'] == sid].iloc[0]
+                assgn_to_replace = row['assignment']
+                assgn_fill_from = row['fill_from']
+
+                # take the curves
+                assgn_fill_curve = grades_ref[grades_ref['in-curve'] == True][assgn_fill_from + '-score'].to_numpy()
+                assgn_to_curve = grades_ref[grades_ref['in-curve'] == True][assgn_to_replace + '-score'].to_numpy()
+                assgn_fill_curve = assgn_fill_curve[~np.isnan(assgn_fill_curve)]
+                assgn_to_curve = assgn_to_curve[~np.isnan(assgn_to_curve)]
+
+                # translate the percentile rank
+                person_score = grades_row[assgn_fill_from + '-score']
+                if not np.isnan(person_score):
+                    percentile = scipy.stats.percentileofscore(assgn_fill_curve, person_score)
+                    translated_score = np.percentile(assgn_to_curve, percentile)
+                    translated_points = translated_score * grades[assgn_to_replace + '-max']
+                    row[assgn_to_replace + '-points'] = translated_points
+                    row[assgn_to_replace + '-score'] = translated_score
+                else: 
+                    S = 'WARN: student {name} {sid} doesn\'t have a score on {fill_from},' + \
+                         ' so they will not have one on {to_replace} either despite drop'
+                    print(S.format(
+                        name=grades_row['name'],
+                        sid=sid,
+                        fill_from=assgn_fill_from,
+                        to_replace=assgn_to_replace
+                    ))
+
+        assgn_exceptions.apply(drop_exam, axis=1)
+        
+        ctx['grades'] = grades
 
 class add_pt(Stage):
 
@@ -309,7 +366,43 @@ class add_pt(Stage):
     """
 
     def process(self, ctx):
-        pass
+        aid, source = self.args('to', 'source')
+        assignments = ctx['assignments']
+        grades = ctx['grades']
+     
+        tbl = ctx[source[0]].copy(deep=True).drop_duplicates(subset='sid')
+        use_existence = source[1] == '--existence'
+        value = self.arg('value') if use_existence else np.nan
+        col = '' if use_existence else source[1] + '_from'
+        tbl.columns = tbl.columns.map(lambda c: str(c) + '_from')
+        
+        join_with_other = grades.merge(tbl, how='left', left_on='sid', right_on='sid_from', suffixes=(False, False))
+
+        def add_point(row):
+            aid_max = row[aid + '-max']
+            aid_cur_points = row[aid + '-points']
+            new_points = aid_cur_points
+
+            if use_existence: 
+                if not pd.isna(row['sid_from']):
+                    new_points = aid_cur_points + value
+            else:
+                if not np.isnan(row[col]):
+                    new_points = np.nan_to_num(aid_cur_points) + row[col]
+
+            new_score = get_score(new_points, aid_max)
+            return pd.Series({
+                # debugging info
+                # 'sid': row['sid'],
+                # 'sid_from': row['sid_from'],
+                # 'eq': '' if row['sid'] == row['sid_from'] else 'NOTEQ',
+                # aid+'-pointsold': aid_cur_points,
+                aid+'-points': new_points,
+                aid+'-score': new_score
+            })
+        
+        new_scores = join_with_other.apply(add_point, axis=1)
+        grades.update(new_scores)
 
 class compute_scores(Stage):
 
@@ -334,8 +427,6 @@ class compute_scores(Stage):
                     score += assgn_score
 
             assignments.apply(per_assignment, axis=1)
-
-            print(hw_score / hw_weight)
             
             return pd.Series({
                 'total-score': score,
@@ -345,6 +436,39 @@ class compute_scores(Stage):
         total_and_hw = grades.apply(compute_for_student, axis=1)
         grades = pd.concat([grades, total_and_hw], axis=1)
         grades = grades.sort_values('total-score', ascending=False).reset_index(drop=True)
+        ctx['grades'] = grades
+
+class determine_curve_participants(Stage):
+
+    """
+    Determine the subset of students that make up the curve.
+    """
+
+    def process(self, ctx):
+        grades = ctx['grades']
+        in_curve = np.repeat(True, grades.shape[0])
+        grades['in-curve'] = in_curve
+
+        if 'remove_incompletes' in self.params and self.params['remove_incompletes']:
+
+            incompletes = set()
+
+            def find_exceptions(row):
+                sid = row['sid']
+                if row['type'] == 'set_grade' and row['grade'] == 'I':
+                    incompletes.add(sid)
+            
+            ctx['student_exceptions'].apply(find_exceptions, axis=1)
+
+            def remove_incompletes(row):
+                d = dict()
+                if row['sid'] in incompletes:
+                    d['in-curve'] = False
+                return pd.Series(d)
+            
+            changes = grades.apply(remove_incompletes, axis=1)
+            grades.update(changes)
+        
         ctx['grades'] = grades
 
 class create_buckets(Stage):
