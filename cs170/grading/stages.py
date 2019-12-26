@@ -409,8 +409,8 @@ class homework_drops(Stage):
 
             return pd.Series(hw_grades)
 
-        # new_hw_grades = grades.apply(hw_drops, axis=1)
-        # grades.update(new_hw_grades)
+        new_hw_grades = grades.apply(hw_drops, axis=1)
+        grades.update(new_hw_grades)
 
         hw_composite_score = grades.apply(compute_hw_score, axis=1)
         grades = pd.concat([grades, hw_composite_score], axis=1)
