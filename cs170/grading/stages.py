@@ -307,6 +307,11 @@ class homework_drops(Stage):
     """
 
     def process(self, ctx):
+
+        def hw_drops(row):
+            pass
+
+
         pass
 
 class exam_drops(Stage):
@@ -323,41 +328,60 @@ class exam_drops(Stage):
 
         # make a copy so as we edit grades, it doesn't change the curve
         grades_ref = ctx['grades'].copy(deep=True)
-        
-        def drop_exam(row):
-            if row['type'] == 'drop_and_fill':
+
+        drops = dict()
+
+        def collect_drops(row):
+             if row['type'] == 'drop_and_fill':
                 sid = row['sid']
-                grades_row = grades[grades['sid'] == sid].iloc[0]
+                if sid not in drops:
+                    drops[sid] = []
+                
                 assgn_to_replace = row['assignment']
                 assgn_fill_from = row['fill_from']
 
-                # take the curves
-                assgn_fill_curve = grades_ref[grades_ref['in-curve'] == True][assgn_fill_from + '-score'].to_numpy()
-                assgn_to_curve = grades_ref[grades_ref['in-curve'] == True][assgn_to_replace + '-score'].to_numpy()
-                assgn_fill_curve = assgn_fill_curve[~np.isnan(assgn_fill_curve)]
-                assgn_to_curve = assgn_to_curve[~np.isnan(assgn_to_curve)]
+                drops[sid].append((assgn_to_replace, assgn_fill_from))
 
-                # translate the percentile rank
-                person_score = grades_row[assgn_fill_from + '-score']
-                if not np.isnan(person_score):
-                    percentile = scipy.stats.percentileofscore(assgn_fill_curve, person_score)
-                    translated_score = np.percentile(assgn_to_curve, percentile)
-                    translated_points = translated_score * grades[assgn_to_replace + '-max']
-                    row[assgn_to_replace + '-points'] = translated_points
-                    row[assgn_to_replace + '-score'] = translated_score
-                else: 
-                    S = 'WARN: student {name} {sid} doesn\'t have a score on {fill_from},' + \
-                         ' so they will not have one on {to_replace} either despite drop'
-                    print(S.format(
-                        name=grades_row['name'],
-                        sid=sid,
-                        fill_from=assgn_fill_from,
-                        to_replace=assgn_to_replace
-                    ))
-
-        assgn_exceptions.apply(drop_exam, axis=1)
+        assgn_exceptions.apply(collect_drops, axis=1)
         
-        ctx['grades'] = grades
+        def drop_exam(row):
+            changes = dict()
+            sid = row['sid']
+
+            if sid in drops:
+
+                grades_row = grades[grades['sid'] == sid].iloc[0]
+
+                for assgn_to_replace, assgn_fill_from in drops[sid]:
+                    # take the curves
+                    assgn_fill_curve = grades_ref[grades_ref['in-curve'] == True][assgn_fill_from + '-score'].to_numpy()
+                    assgn_to_curve = grades_ref[grades_ref['in-curve'] == True][assgn_to_replace + '-score'].to_numpy()
+                    assgn_fill_curve = assgn_fill_curve[~np.isnan(assgn_fill_curve)]
+                    assgn_to_curve = assgn_to_curve[~np.isnan(assgn_to_curve)]
+
+                    # translate the percentile rank
+                    person_score = grades_row[assgn_fill_from + '-score']
+                    if not np.isnan(person_score):
+                        percentile = scipy.stats.percentileofscore(assgn_fill_curve, person_score)
+                        translated_score = np.percentile(assgn_to_curve, percentile)
+                        translated_points = translated_score * grades_row[assgn_to_replace + '-max']
+                        changes[assgn_to_replace + '-points'] = translated_points
+                        changes[assgn_to_replace + '-score'] = translated_score
+                    else: 
+                        S = 'WARN: student {name} {sid} doesn\'t have a score on {fill_from},' + \
+                            ' so they will not have one on {to_replace} either despite drop'
+                        print(S.format(
+                            name=grades_row['name'],
+                            sid=sid,
+                            fill_from=assgn_fill_from,
+                            to_replace=assgn_to_replace
+                        ))
+
+            return pd.Series(changes)
+
+        changes = grades.apply(drop_exam, axis=1)
+        changes.to_csv('changes.csv')
+        grades.update(changes)
 
 class add_pt(Stage):
 
