@@ -482,7 +482,6 @@ class exam_drops(Stage):
             return pd.Series(changes)
 
         changes = grades.apply(drop_exam, axis=1)
-        changes.to_csv('changes.csv')
         grades.update(changes)
 
 class add_pt(Stage):
