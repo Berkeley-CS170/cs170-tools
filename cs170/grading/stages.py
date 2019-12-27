@@ -596,8 +596,19 @@ class create_buckets(Stage):
     """
 
     def process(self, ctx):
-        targets = self.arg('targets')
-        students = ctx['grades']
+        letters, gpas, targets = self.args('letters', 'gpas', 'targets')
+        F_bucket = self.arg('F_bucket')
+        F_final_ceil = F_bucket['final_ceil']
+        F_score_ceil = F_bucket['score_ceil']
+        create_F_before_curve = self.arg('create_F_before_curve')
+        grades = ctx['grades']
+        grades = grades[grades['in-curve'] == True]
+
+        buckets = pd.DataFrame({
+            'letter': letters,
+            'gpa': gpas,
+            'target': targets
+        })
 
         def discretize_targets(no_students, targets):
             if sum(targets) != 1.0:
@@ -610,10 +621,26 @@ class create_buckets(Stage):
                 cumulative_targets.append(size_bucket)
             cumulative_targets[-1] = no_students
             return cumulative_targets
+
+        to_fail = grades[(np.nan_to_num(grades['total-score']) < F_score_ceil) & (np.nan_to_num(grades['final-score']) < F_final_ceil)]
+        if create_F_before_curve: N_students = grades.shape[0] - to_fail.shape[0]
+        else: N_students = grades.shape[0]
+
+        print('{} on curve, total on curve {}, failing {}'.format(N_students, grades.shape[0], to_fail.shape[0]))
         
-        discrete = discretize_targets(students.shape[0], targets)
-        buckets = [dict(size=t) for t in discrete]
-        ctx['buckets'] = pd.DataFrame(buckets)
+        discrete = discretize_targets(N_students, targets)
+        buckets['num_at_or_above'] = discrete
+        buckets['final_ceil'] = np.nan
+        buckets['score_ceil'] = np.nan
+
+        F_bucket_i = buckets.index[buckets['letter'] == 'F'][0]
+        buckets.at[F_bucket_i, 'final_ceil'] = F_final_ceil
+        buckets.at[F_bucket_i, 'score_ceil'] = F_score_ceil
+        if create_F_before_curve:
+            # -1 is an indicator that Fs are outside the curve
+            buckets.at[F_bucket_i, 'num_at_or_above'] = -1
+
+        ctx['buckets'] = buckets
 
 class adjust_buckets(Stage):
 
@@ -623,36 +650,49 @@ class adjust_buckets(Stage):
 
     def process(self, ctx):
         scan_frac, max_scan = self.args('scan_frac', 'max_scan')
+        grades = ctx['grades']
 
-        all_scores = ctx['grades']['total-score']
-        buckets = ctx['buckets']['size']
+        grades = grades[grades['in-curve'] == True]
+        buckets = ctx['buckets']
+        bucket_sizes = buckets['num_at_or_above']
+        F_bucket_i = buckets.index[buckets['letter'] == 'F'][0]
 
-        def adjust_buckets(scores, buckets, scan_frac=0.2, max_scan=10):
-            new_buckets = []
-            for i, b in enumerate(buckets):
-                # adjust all but the last bucket - it has to include everyone anyway
-                if i != len(buckets) - 1:
-                    bucket_size = buckets[0] if i == 0 else buckets[i] - buckets[i-1]
-                    num_scan = min(max_scan, int(bucket_size * scan_frac))
-                    # scan width [b - num_scan, b + num_scan]
-                    samples = np.array([])
-                    bs = []
-                    for new_b in range(b - num_scan, b + num_scan + 1):
-                        score_diff = scores[new_b - 1] - scores[new_b]
-                        bs.append((len(bs), new_b))
-                        samples = np.append(samples, score_diff)
-                    print('mean difference of', len(bs), 'differences around bucket: ', np.mean(samples))
-                    max_i = max(bs, key=lambda x: samples[x[0]])[0]
-                    print('maximum', bs[max_i][1], 'with diff', samples[max_i],
-                        '({:2.2f}x)'.format(samples[max_i]/np.mean(samples)))
-                    new_b = bs[max_i][1]
-                    new_buckets.append(new_b)
-                else:
-                    new_buckets.append(b)
-            return new_buckets
+        # if Fs are outside the curve, then ignore them
+        if buckets.at[F_bucket_i, 'num_at_or_above'] == -1:
+            F_final_ceil = buckets.at[F_bucket_i, 'final_ceil']
+            F_score_ceil = buckets.at[F_bucket_i, 'score_ceil']
+            # to_fail = grades[(grades['total-score'] < F_score_ceil) & (grades['final-score'] < F_final_ceil)]
+            # print('to_fail', to_fail.shape[0])
+            grades = grades[(np.nan_to_num(grades['total-score']) >= F_score_ceil) | (np.nan_to_num(grades['final-score']) >= F_final_ceil)]
 
-        new_buckets = adjust_buckets(all_scores, buckets, scan_frac, max_scan)
-        ctx['buckets']['size'] = new_buckets
+        # avoid indexing, we care about the actual locations of scores
+        scores = grades['total-score'].to_numpy()
+
+        # perform the bucket adjustments!
+        new_bucket_sizes = []
+        for i, b in enumerate(bucket_sizes):
+            # adjust all but the last two buckets - it has to include everyone anyway
+            # F bucket has been assigned, 
+            if i < len(bucket_sizes) - 2:
+                letter = buckets.at[i, 'letter']
+                bucket_size = bucket_sizes[0] if i == 0 else bucket_sizes[i] - bucket_sizes[i-1]
+                num_scan = min(max_scan, int(bucket_size * scan_frac))
+                # scan width [b - num_scan, b + num_scan]
+                samples = np.array([])
+                bs = []
+                for new_b in range(b - num_scan, b + num_scan + 1):
+                    score_diff = scores[new_b - 1] - scores[new_b]
+                    bs.append((len(bs), new_b))
+                    samples = np.append(samples, score_diff)
+                print('mean difference of {} differences around bucket {}: {:2.5f}'.format(len(bs), buckets.at[i, 'letter'], np.mean(samples)))
+                max_i = max(bs, key=lambda x: samples[x[0]])[0]
+                print('  maximum at {} with diff {:2.5f} ({:2.2f}x)'.format(bs[max_i][1], samples[max_i], samples[max_i]/np.mean(samples)))
+                new_b = bs[max_i][1]
+                new_bucket_sizes.append(new_b)
+            else:
+                new_bucket_sizes.append(b)
+
+        ctx['buckets']['num_at_or_above'] = new_bucket_sizes
 
 class create_boundaries(Stage):
 
@@ -663,29 +703,68 @@ class create_boundaries(Stage):
 
     def process(self, ctx):
         buckets = ctx['buckets']
-        all_scores = ctx['grades']['total-score']
-        boundaries = [all_scores[s-1] for s in buckets['size']]
+        grades = ctx['grades']
+        grades = grades[grades['in-curve'] == True]
+        F_bucket_i = buckets.index[buckets['letter'] == 'F'][0]
+
+        # if Fs are outside the curve, then ignore them
+        if buckets.at[F_bucket_i, 'num_at_or_above'] == -1:
+            F_final_ceil = buckets.at[F_bucket_i, 'final_ceil']
+            F_score_ceil = buckets.at[F_bucket_i, 'score_ceil']
+            # to_fail = grades[(grades['total-score'] < F_score_ceil) & (grades['final-score'] < F_final_ceil)]
+            # print('to_fail', to_fail.shape[0])
+            grades = grades[(np.nan_to_num(grades['total-score']) >= F_score_ceil) | (np.nan_to_num(grades['final-score']) >= F_final_ceil)]
+
+        all_scores = grades['total-score'].to_numpy()
+
+        boundaries = [0.0 if s == -1 else all_scores[s-1] for s in buckets['num_at_or_above']]
         buckets['boundary'] = boundaries
         ctx['buckets'] = buckets
+        # print(ctx['buckets'])
 
 class assign_letters(Stage):
 
     def process(self, ctx):
-        final_floor, score_floor, letter_grades, gpas = self.args('final_floor', 'score_floor', 'grades', 'gpas')
         grades = ctx['grades']
-        boundaries = ctx['buckets']['boundary']
+        buckets = ctx['buckets']
+
+        F_bucket_i = buckets.index[buckets['letter'] == 'F'][0]
+        F_final_ceil = buckets.at[F_bucket_i, 'final_ceil']
+        F_score_ceil = buckets.at[F_bucket_i, 'score_ceil']
+
+        grade_exceptions = dict()
+
+        def find_exceptions(row):
+            sid = row['sid']
+            if row['type'] == 'set_grade':
+                grade_exceptions[sid] = row['grade']
+
+        if 'student_exceptions' in ctx:
+            ctx['student_exceptions'].apply(find_exceptions, axis=1)
+
+        def get_gpa(letter):
+            if letter == 'I': return np.nan
+            # these are just kinda default.s
+            elif letter == 'NP': return 0.0
+            elif letter == 'P': return 3.0
+            else: return buckets[buckets['letter'] == letter][0]['gpa']
 
         def compute_letter(row):
+            sid = row['sid']
             score = row['total-score']
             final = row['final-score']
 
-            if score < score_floor and (np.isnan(final) or final < final_floor):
+            if sid in grade_exceptions:
+                letter = grade_exceptions[sid]
+                return pd.Series({'letter': letter, 'gpa': get_gpa(letter)})
+
+            if score <= F_score_ceil and (np.isnan(final) or final <= F_final_ceil):
                 return pd.Series({'letter': 'F', 'gpa': 0})
 
-            bucket_i = min(k for k in range(len(boundaries)) if boundaries[k] <= score)
+            bucket = buckets[buckets['boundary'] <= score].iloc[0]
             return pd.Series({
-                'letter': letter_grades[bucket_i],
-                'gpa': gpas[bucket_i]
+                'letter': bucket['letter'],
+                'gpa': bucket['gpa']
             })
 
         letters = grades.apply(compute_letter, axis=1)
