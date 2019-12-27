@@ -407,6 +407,9 @@ class homework_drops(Stage):
             i += 1
             if i % 50 == 0:
                 print('completed drops for {}/{}'.format(i, N))
+
+            # if not allow_drops:
+            #     print(hw_grades)
             return pd.Series(hw_grades)
 
         def compute_hw_score(row):
