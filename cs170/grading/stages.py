@@ -421,7 +421,7 @@ class homework_drops(Stage):
         new_hw_grades = grades.apply(hw_drops, axis=1)
         grades.update(new_hw_grades)
 
-        new_hw_grades.to_csv('new_hw_grades.csv')
+        # new_hw_grades.to_csv('new_hw_grades.csv')
 
         hw_composite_score = grades.apply(compute_hw_score, axis=1)
         grades = pd.concat([grades, hw_composite_score], axis=1)
@@ -493,7 +493,7 @@ class exam_drops(Stage):
             return pd.Series(changes)
 
         changes = grades.apply(drop_exam, axis=1)
-        changes.to_csv('changes.csv')
+        # changes.to_csv('changes.csv')
         grades.update(changes)
 
 class add_pt(Stage):
