@@ -402,8 +402,8 @@ class homework_drops(Stage):
                 total_score += row[a + '-weight'] * np.nan_to_num(row[a + '-score'])
 
             # compute score, points, weight, max, for a fake composite homework assignment
-            hw_grades['hw-composite-score'] = total_score     
-            hw_grades['hw-composite-points'] = total_score
+            hw_grades['hw-composite-score'] = total_score / total_weight    
+            hw_grades['hw-composite-points'] = total_score / total_weight
             hw_grades['hw-composite-weight'] = total_weight
             hw_grades['hw-composite-max'] = 1.0
 
