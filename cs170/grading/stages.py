@@ -312,7 +312,7 @@ class homework_drops(Stage):
 
     def process(self, ctx):
         default = self.arg('default')
-        disallow_cheater_drops = self.arg('disallow_cheater_dropss')
+        disallow_cheater_drops = self.arg('disallow_cheater_drops')
         assgn = ctx['assignments']
         hws = assgn[assgn['type'] == 'hw']
         grades = ctx['grades']
