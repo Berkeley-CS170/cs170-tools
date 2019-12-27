@@ -828,8 +828,9 @@ class render_reports(Stage):
 
             row['assignments'] = h
             name = row['name'].split(', ')
-            if len(name) == 2: name = name[1] + ' ' + name[0]
-            row['name'] = name
+            if len(name) == 2: 
+                name = name[1] + ' ' + name[0]
+                row['name'] = name
             row['total-score'] = row['total-score'] * 100
             return main_tpl.format(**row)
         
