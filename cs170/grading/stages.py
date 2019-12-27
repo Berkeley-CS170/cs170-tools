@@ -835,7 +835,7 @@ class render_reports(Stage):
             <p style="page-break-before: always;">&nbsp;</p>
         '''
 
-        print('Rendering big pdf..')
+        print('Rendering big pdf.. (takes ~15min)')
 
         html_students = header_tpl + PAGE_BREAK.join(grades.apply(render_for, axis=1)) + '</body>'
         weasy_doc_students = weasyprint.HTML(string=html_students)
