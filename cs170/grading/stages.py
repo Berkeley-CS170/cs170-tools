@@ -312,6 +312,7 @@ class homework_drops(Stage):
 
     def process(self, ctx):
         default = self.arg('default')
+        disallow_cheater_drops = self.arg('disallow_cheater_dropss')
         assgn = ctx['assignments']
         hws = assgn[assgn['type'] == 'hw']
         grades = ctx['grades']
@@ -362,10 +363,15 @@ class homework_drops(Stage):
 
             hw_grades = dict()
 
+            allow_drops = True
+
             for aid, score, assgn_droppable in exceptions:
                 # print(sid, 'exceptions ', exceptions)
                 # if we don't make it droppable, remove it from droppable
                 if not pd.isna(assgn_droppable) and not assgn_droppable:
+                    # if anything is undroppable, disallow homework drops for the cheater
+                    if disallow_cheater_drops:
+                        allow_drops = False
                     if aid in droppable:
                         droppable.remove(aid)
                 hw_grades[aid + '-points'] = score
@@ -379,22 +385,25 @@ class homework_drops(Stage):
                 if s in hw_grades: return hw_grades[s]
                 else: return np.nan_to_num(row[s])
 
-            # I tried to figure out how to do this with dynamic programmming, but the safest way is just brute force search...
-            for k in reversed(range(0, min(num_drops, len(droppable)) + 1)):
-                for c in itertools.combinations(droppable, k):
-                    new_weight = sum(row[aid + '-weight'] for aid in all_hws if aid not in c)
-                    scaling_factor = cur_weight / new_weight
-
-                    try_score = sum(score(aid) * row[aid + '-weight'] for aid in all_hws if aid not in c)
-                    try_weighted_score = try_score / new_weight
-                    if try_weighted_score > best_score:
-                        best_score = try_weighted_score
-                        best_weights = dict()
-                        for aid in all_hws:
-                            if aid in c: best_weights[aid + '-weight'] = 0.0
-                            else: best_weights[aid + '-weight'] = row[aid + '-weight'] * scaling_factor
+            if allow_drops:
             
-            hw_grades.update(best_weights)
+                # I tried to figure out how to do this with dynamic programmming, but the safest way is just brute force search...
+                for k in reversed(range(0, min(num_drops, len(droppable)) + 1)):
+                    for c in itertools.combinations(droppable, k):
+                        new_weight = sum(row[aid + '-weight'] for aid in all_hws if aid not in c)
+                        scaling_factor = cur_weight / new_weight
+
+                        try_score = sum(score(aid) * row[aid + '-weight'] for aid in all_hws if aid not in c)
+                        try_weighted_score = try_score / new_weight
+                        if try_weighted_score > best_score:
+                            best_score = try_weighted_score
+                            best_weights = dict()
+                            for aid in all_hws:
+                                if aid in c: best_weights[aid + '-weight'] = 0.0
+                                else: best_weights[aid + '-weight'] = row[aid + '-weight'] * scaling_factor
+                
+                hw_grades.update(best_weights)
+            
             i += 1
             if i % 50 == 0:
                 print('completed drops for {}/{}'.format(i, N))
