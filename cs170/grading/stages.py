@@ -1,7 +1,9 @@
 from .pipeline import *
 from .util import levenshtein
 import pandas as pd
+import collections
 import numpy as np
+import weasyprint
 import scipy.stats
 import itertools
 import os, os.path
@@ -76,7 +78,6 @@ class create_assignments(Stage):
             elif assgn_id == 'final': return 'Final Exam'
             elif assgn_id == 'proj': return 'Project'
             else: raise ValueError()
-            
 
         for assgn_id in assgn:
             weight = assgn[assgn_id]
@@ -330,11 +331,13 @@ class homework_drops(Stage):
             if row['type'] == 'set_score':
                 if sid not in assgn_exceptions:
                     assgn_exceptions[sid] = []
-                assignments = row['assignment'].replace(' ', '').split(',')
-                score = row['score']
-                droppable = row['droppable']
-                for a in assignments:
-                    assgn_exceptions[sid].append((a, score, droppable))
+                if not pd.isna(row['assignment']):
+                    assignments = row['assignment'].replace(' ', '').split(',')
+                    score = row['score']
+                    droppable = row['droppable']
+                    for a in assignments:
+                        if a != '':
+                            assgn_exceptions[sid].append((a, score, droppable))
         
         if 'assignment_exceptions' in ctx:
             ctx['assignment_exceptions'].apply(find_assgn_exceptions, axis=1)
@@ -773,7 +776,57 @@ class assign_letters(Stage):
         print('avg gpa: {}'.format(grades['gpa'].mean()))
         ctx['grades'] = grades
 
+def read_file(f):
+    with open(f, 'r') as file:
+        data = file.read()
+    return data
+
 class render_reports(Stage):
 
     def process(self, ctx):
-        pass
+        template_file, header_file = self.args('template', 'header_template')
+        assignments = ctx['assignments']
+        grades = ctx['grades']
+        main_tpl = read_file(template_file)
+        header_tpl = read_file(header_file)
+
+        def render_for(row):
+
+            h = ''
+
+            for _, assgn_row in assignments.iterrows():
+                aid = assgn_row['id']
+                score = 100 * np.nan_to_num(row[aid + '-score'])
+                weight = 100 * row[aid + '-weight']
+                h += '''<tr>
+                <td>{}</td>
+                <td>{:2.2f}%</td>
+                <td>{:2.2f}%</td>
+                </tr>
+                '''.format(assgn_row['name'], score, weight)
+
+            row['assignments'] = h
+            name = row['name'].split(', ')
+            if len(name) == 2: name = name[1] + ' ' + name[0]
+            row['name'] = name
+            return main_tpl.format(**row)
+        
+        outline_row = collections.defaultdict(lambda: 0.0)
+        outline_row['name'] = ''
+        outline_row['sid'] = ''
+        outline_row['total-score'] = 0.0
+
+        html_outline = header_tpl + render_for(outline_row) + '</body>'
+        weasy_doc_outline = weasyprint.HTML(string=html_outline)
+        weasy_doc_outline.write_pdf('./out/grade-report-outline.pdf')
+
+        PAGE_BREAK = '''
+            <p style="page-break-after: always;">&nbsp;</p>
+            <p style="page-break-before: always;">&nbsp;</p>
+        '''
+
+        print('Rendering big pdf..')
+
+        html_students = header_tpl + PAGE_BREAK.join(grades.apply(render_for, axis=1)) + '</body>'
+        weasy_doc_students = weasyprint.HTML(string=html_students)
+        weasy_doc_students.write_pdf('./out/grade-reports.pdf')
