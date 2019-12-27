@@ -850,6 +850,19 @@ class render_reports(Stage):
 
         print('Rendering big pdf.. (takes ~15min)')
 
-        html_students = header_tpl + PAGE_BREAK.join(grades.apply(render_for, axis=1)) + '</body>'
-        weasy_doc_students = weasyprint.HTML(string=html_students)
-        weasy_doc_students.write_pdf('./out/grade-reports.pdf')
+        if 'split' in self.params:
+            split_size = self.params['split']
+        else:
+            split_size = grades.shape[0]
+
+        def split(df, size):
+            if df.shape[0] > size:
+                return [df[:size]] + split(df[size:], size)
+            else: return [df]
+
+        grades_split = split(grades, split_size)
+        for i, df in enumerate(grades_split):
+            html_students = header_tpl + PAGE_BREAK.join(df.apply(render_for, axis=1)) + '</body>'
+            weasy_doc_students = weasyprint.HTML(string=html_students)
+            weasy_doc_students.write_pdf('./out/grade-reports-{}.pdf'.format(i))
+            print('Rendered {}/{}'.format(i+1, len(grades_split)))
