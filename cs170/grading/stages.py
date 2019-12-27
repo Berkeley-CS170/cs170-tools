@@ -28,6 +28,8 @@ class read_csv(Stage):
             stringify = self.params['stringify']
             cols = [stringify] if isinstance(stringify, str) else stringify
             for col in cols:
+                if np.any(np.isnan(df[col])):
+                    print('WARN: {} column {} has NaN values, will result in sids like 123435.0 and screw everything up'.format(dest, col))
                 df[col] = df[col].astype('U')
         
         ctx[dest] = df
@@ -346,6 +348,8 @@ class homework_drops(Stage):
         i = 0
         all_hws = set(hws['id'])
 
+        # print(ctx['assignment_exceptions'])
+
         def hw_drops(row):
             nonlocal i
             sid = row['sid']
@@ -359,9 +363,11 @@ class homework_drops(Stage):
             hw_grades = dict()
 
             for aid, score, assgn_droppable in exceptions:
+                # print(sid, 'exceptions ', exceptions)
                 # if we don't make it droppable, remove it from droppable
                 if not pd.isna(assgn_droppable) and not assgn_droppable:
-                    droppable.remove(aid)
+                    if aid in droppable:
+                        droppable.remove(aid)
                 hw_grades[aid + '-points'] = score
                 hw_grades[aid + '-score'] = score / row[aid + '-max']
 
@@ -414,6 +420,8 @@ class homework_drops(Stage):
 
         new_hw_grades = grades.apply(hw_drops, axis=1)
         grades.update(new_hw_grades)
+
+        new_hw_grades.to_csv('new_hw_grades.csv')
 
         hw_composite_score = grades.apply(compute_hw_score, axis=1)
         grades = pd.concat([grades, hw_composite_score], axis=1)
@@ -485,6 +493,7 @@ class exam_drops(Stage):
             return pd.Series(changes)
 
         changes = grades.apply(drop_exam, axis=1)
+        changes.to_csv('changes.csv')
         grades.update(changes)
 
 class add_pt(Stage):
@@ -809,6 +818,7 @@ class render_reports(Stage):
             name = row['name'].split(', ')
             if len(name) == 2: name = name[1] + ' ' + name[0]
             row['name'] = name
+            row['total-score'] = row['total-score'] * 100
             return main_tpl.format(**row)
         
         outline_row = collections.defaultdict(lambda: 0.0)
